@@ -12,7 +12,29 @@ import struct
 import base64
 import binascii
 import threading
+import subprocess
+import tempfile
+import shutil
 from pathlib import Path
+
+# 获取ffmpeg路径（支持PyInstaller打包后的环境）
+def get_ffmpeg_path():
+    """获取ffmpeg可执行文件路径"""
+    # PyInstaller打包后，资源文件在sys._MEIPASS目录下
+    if getattr(sys, 'frozen', False):
+        base_path = sys._MEIPASS
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+    
+    # 在资源目录中查找ffmpeg
+    ffmpeg_names = ['ffmpeg.exe', 'ffmpeg']
+    for name in ffmpeg_names:
+        ffmpeg_path = os.path.join(base_path, name)
+        if os.path.exists(ffmpeg_path):
+            return ffmpeg_path
+    
+    # 回退到系统PATH中的ffmpeg
+    return 'ffmpeg'
 
 from Crypto.Cipher import AES
 from mutagen.mp3 import MP3
@@ -137,6 +159,7 @@ class NCMDecryptor:
                 
                 # 确定输出格式和文件名（强制转换为mp3）
                 music_name = meta_data.get('musicName', input_path.stem)
+                original_format = meta_data.get('format', 'mp3')
                 music_format = 'mp3'  # 强制输出为mp3格式
                 
                 # 清理文件名中的非法字符
@@ -153,8 +176,10 @@ class NCMDecryptor:
                     output_path = output_dir / f"{safe_name}_{counter}.{music_format}"
                     counter += 1
                 
-                # 解密音频数据并写入文件
-                with open(output_path, 'wb') as out_file:
+                # 先解密到临时文件（原始格式）
+                temp_path = Path(tempfile.mktemp(suffix=f'.{original_format}'))
+                
+                with open(temp_path, 'wb') as out_file:
                     while True:
                         chunk = bytearray(f.read(0x8000))
                         chunk_length = len(chunk)
@@ -170,6 +195,35 @@ class NCMDecryptor:
                             ]
                         
                         out_file.write(chunk)
+                
+                # 使用FFmpeg将原始格式转码为MP3
+                if original_format.lower() != 'mp3':
+                    try:
+                        ffmpeg_cmd = get_ffmpeg_path()
+                        subprocess.run(
+                            [
+                                ffmpeg_cmd, '-y', '-i', str(temp_path),
+                                '-codec:a', 'libmp3lame', '-b:a', '320k',
+                                '-q:a', '0', str(output_path)
+                            ],
+                            capture_output=True, check=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW
+                        )
+                        # 转码成功，删除临时文件
+                        temp_path.unlink(missing_ok=True)
+                    except subprocess.CalledProcessError:
+                        # FFmpeg转码失败，尝试直接复制临时文件
+                        if temp_path.exists():
+                            shutil.copy2(str(temp_path), str(output_path))
+                            temp_path.unlink(missing_ok=True)
+                    except FileNotFoundError:
+                        # FFmpeg不存在，直接复制临时文件
+                        if temp_path.exists():
+                            shutil.copy2(str(temp_path), str(output_path))
+                            temp_path.unlink(missing_ok=True)
+                else:
+                    # 原始就是mp3，直接移动
+                    shutil.move(str(temp_path), str(output_path))
                 
                 # 写入封面和元数据到MP3
                 if music_format.lower() == 'mp3' and image_data:
