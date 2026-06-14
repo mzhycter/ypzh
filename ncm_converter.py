@@ -135,9 +135,9 @@ class NCMDecryptor:
                 image_size = struct.unpack('<I', f.read(4))[0]
                 image_data = f.read(image_size) if image_size > 0 else None
                 
-                # 确定输出格式和文件名
+                # 确定输出格式和文件名（强制转换为mp3）
                 music_name = meta_data.get('musicName', input_path.stem)
-                music_format = meta_data.get('format', 'mp3')
+                music_format = 'mp3'  # 强制输出为mp3格式
                 
                 # 清理文件名中的非法字符
                 safe_name = "".join(c for c in music_name if c not in '<>:"/\\|?*')
